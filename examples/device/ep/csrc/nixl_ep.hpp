@@ -143,6 +143,8 @@ private:
     NixlMemoryViews staged_memory_views;
     nixl_ep::gpu_nixl_ctx* gpu_ctx_ptr = nullptr;
 
+    // There is a single slot per op type, so only one hook of each type may be pending:
+    // the previous hook must be run before the next `return_recv_hook=True` call.
     std::function<void()> pending_combine_recv_hook;
     std::function<void()> pending_dispatch_recv_hook;
 
