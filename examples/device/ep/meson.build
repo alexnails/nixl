@@ -27,6 +27,8 @@ if torch_check.returncode() != 0
     subdir_done()
 endif
 
+torch_target_version = '0x020b000000000000'  # 2.11
+
 # Get PyTorch base directory from Python
 torch_dir = run_command(py, '-c', 'import torch, os; print(os.path.dirname(torch.__file__))', check: true).stdout().strip()
 torch_include_base = join_paths(torch_dir, 'include')
@@ -67,11 +69,17 @@ nixl_ep_sources = [
     'csrc/kernels/nixl_ep_ll.cu',
 ]
 
+# Torch bundles its own pybind11 headers. Put the standalone pybind11 first so that
+# <pybind11/...> never resolves to the bundled copy.
+pybind_include = run_command(py, '-c', 'import pybind11; print(pybind11.get_include())',
+    check: true).stdout().strip()
+
 nixl_ep_inc_dirs = [
     nixl_inc_dirs,
     nixl_device_api_inc_dirs,
     include_directories('csrc'),
     include_directories('csrc/kernels'),
+    include_directories(pybind_include),
     torch_inc_dirs,
 ]
 
@@ -88,6 +96,7 @@ nixl_ep_ext_name = 'nixl_ep_cpp_torch' + torch_ver
 nixl_ep_cpp_args = [
     '-DHAVE_CUDA',
     '-DTORCH_EXTENSION_NAME=' + nixl_ep_ext_name,
+    '-DTORCH_TARGET_VERSION=' + torch_target_version,
     '-Wno-deprecated-declarations',
     '-Wno-unused-variable',
     '-Wno-sign-compare',
