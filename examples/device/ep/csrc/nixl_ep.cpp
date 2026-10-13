@@ -446,6 +446,8 @@ Buffer::dispatch(const torch::stable::Tensor &x, const torch::stable::Tensor &to
     const int rank_bound = get_rank_bound(num_experts);
     const int num_max_recv_tokens = rank_bound * num_max_dispatch_tokens_per_rank;
     EP_HOST_ASSERT(num_max_recv_tokens % 4 == 0 and "TMA requires the number of tokens to be multiple of 4");
+    EP_HOST_ASSERT(not (async and return_recv_hook));
+    EP_HOST_ASSERT(not return_recv_hook or pending_dispatch_recv_hook == nullptr);
 
     // Diagnosis tensors
     if (cumulative_local_expert_recv_stats.has_value()) {
@@ -474,8 +476,6 @@ Buffer::dispatch(const torch::stable::Tensor &x, const torch::stable::Tensor &to
     // NOTES: the hook mode will always use the default stream
     cudaStream_t compute_stream = cuda_stream::get_current();
     cudaStream_t launch_stream = return_recv_hook ? compute_stream : comm_stream;
-    EP_HOST_ASSERT(not (async and return_recv_hook));
-    EP_HOST_ASSERT(not return_recv_hook or pending_dispatch_recv_hook == nullptr);
     if (not return_recv_hook)
         stream_wait(launch_stream, compute_stream);
 
@@ -623,6 +623,8 @@ Buffer::combine(const torch::stable::Tensor& x, const torch::stable::Tensor& top
     EP_HOST_ASSERT(src_info.dim() == 2 and src_info.is_contiguous());
     EP_HOST_ASSERT(src_info.scalar_type() == torch::headeronly::ScalarType::Int and x.size(0) == src_info.size(0));
     EP_HOST_ASSERT(src_info.size(1) == rank_bound * num_max_dispatch_tokens_per_rank);
+    EP_HOST_ASSERT(not (async and return_recv_hook));
+    EP_HOST_ASSERT(not return_recv_hook or pending_combine_recv_hook == nullptr);
 
     if (combine_wait_recv_cost_stats.has_value()) {
         EP_HOST_ASSERT(combine_wait_recv_cost_stats->scalar_type() == torch::headeronly::ScalarType::Long);
@@ -646,8 +648,6 @@ Buffer::combine(const torch::stable::Tensor& x, const torch::stable::Tensor& top
     // NOTES: the hook mode will always use the default stream
     cudaStream_t compute_stream = cuda_stream::get_current();
     cudaStream_t launch_stream = return_recv_hook ? compute_stream : comm_stream;
-    EP_HOST_ASSERT(not (async and return_recv_hook));
-    EP_HOST_ASSERT(not return_recv_hook or pending_combine_recv_hook == nullptr);
     if (not return_recv_hook)
         stream_wait(launch_stream, compute_stream);
 
