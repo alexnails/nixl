@@ -448,22 +448,15 @@ Buffer::dispatch(const torch::stable::Tensor &x, const torch::stable::Tensor &to
     EP_HOST_ASSERT(num_max_recv_tokens % 4 == 0 and "TMA requires the number of tokens to be multiple of 4");
 
     // Diagnosis tensors
-    int *cumulative_local_expert_recv_stats_ptr = nullptr;
     if (cumulative_local_expert_recv_stats.has_value()) {
         EP_HOST_ASSERT(cumulative_local_expert_recv_stats->scalar_type() == torch::headeronly::ScalarType::Int);
         EP_HOST_ASSERT(cumulative_local_expert_recv_stats->dim() == 1 and cumulative_local_expert_recv_stats->is_contiguous());
         EP_HOST_ASSERT(cumulative_local_expert_recv_stats->size(0) == num_experts_per_rank);
-        cumulative_local_expert_recv_stats_ptr =
-            cumulative_local_expert_recv_stats->mutable_data_ptr<int>();
     }
-
-    int64_t *dispatch_wait_recv_cost_stats_ptr = nullptr;
     if (dispatch_wait_recv_cost_stats.has_value()) {
         EP_HOST_ASSERT(dispatch_wait_recv_cost_stats->scalar_type() == torch::headeronly::ScalarType::Long);
         EP_HOST_ASSERT(dispatch_wait_recv_cost_stats->dim() == 1 and dispatch_wait_recv_cost_stats->is_contiguous());
         EP_HOST_ASSERT(dispatch_wait_recv_cost_stats->size(0) == rank_bound);
-        dispatch_wait_recv_cost_stats_ptr =
-            dispatch_wait_recv_cost_stats->mutable_data_ptr<int64_t>();
     }
 
     auto num_tokens = static_cast<int>(x.size(0)), hidden = static_cast<int>(x.size(1));
@@ -564,7 +557,8 @@ Buffer::dispatch(const torch::stable::Tensor &x, const torch::stable::Tensor &to
                                packed_recv_src_info.mutable_data_ptr<int>(), packed_recv_layout_range.mutable_data_ptr<int64_t>(),
                                packed_recv_count.mutable_data_ptr<int>(),
                                mask_buffer_ptr,
-                               cumulative_local_expert_recv_stats_ptr, dispatch_wait_recv_cost_stats_ptr,
+                               cumulative_local_expert_recv_stats.has_value() ? cumulative_local_expert_recv_stats->mutable_data_ptr<int>() : nullptr,
+                               dispatch_wait_recv_cost_stats.has_value() ? dispatch_wait_recv_cost_stats->mutable_data_ptr<int64_t>() : nullptr,
                                buffer.dispatch_rdma_recv_data_buffer, buffer.dispatch_rdma_recv_count_buffer,
                                buffer.dispatch_rdma_send_buffer,
                                x.const_data_ptr(), topk_idx.const_data_ptr<topk_idx_t>(),
@@ -629,14 +623,11 @@ Buffer::combine(const torch::stable::Tensor& x, const torch::stable::Tensor& top
     EP_HOST_ASSERT(src_info.dim() == 2 and src_info.is_contiguous());
     EP_HOST_ASSERT(src_info.scalar_type() == torch::headeronly::ScalarType::Int and x.size(0) == src_info.size(0));
     EP_HOST_ASSERT(src_info.size(1) == rank_bound * num_max_dispatch_tokens_per_rank);
-    int64_t* combine_wait_recv_cost_stats_ptr;
+
     if (combine_wait_recv_cost_stats.has_value()) {
         EP_HOST_ASSERT(combine_wait_recv_cost_stats->scalar_type() == torch::headeronly::ScalarType::Long);
         EP_HOST_ASSERT(combine_wait_recv_cost_stats->dim() == 1 and combine_wait_recv_cost_stats->is_contiguous());
         EP_HOST_ASSERT(combine_wait_recv_cost_stats->size(0) == rank_bound);
-        combine_wait_recv_cost_stats_ptr = combine_wait_recv_cost_stats->mutable_data_ptr<int64_t>();
-    } else {
-        combine_wait_recv_cost_stats_ptr = nullptr;
     }
 
     auto hidden = static_cast<int>(x.size(2));
@@ -686,7 +677,7 @@ Buffer::combine(const torch::stable::Tensor& x, const torch::stable::Tensor& top
                               x.const_data_ptr(), topk_idx.const_data_ptr<topk_idx_t>(), topk_weights.const_data_ptr<float>(),
                               src_info.const_data_ptr<int>(), layout_range.const_data_ptr<int64_t>(),
                               mask_buffer_ptr,
-                              combine_wait_recv_cost_stats_ptr,
+                              combine_wait_recv_cost_stats.has_value() ? combine_wait_recv_cost_stats->mutable_data_ptr<int64_t>() : nullptr,
                               next_clean_meta.first, next_clean_meta.second,
                               num_combined_tokens, hidden, num_max_dispatch_tokens_per_rank,
                               num_topk, rank_bound, num_experts_per_rank, rank,
