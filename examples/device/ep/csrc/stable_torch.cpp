@@ -121,19 +121,19 @@ dispatch_recv_hook(int64_t buffer_ptr) {
 } // namespace
 
 STABLE_TORCH_LIBRARY(nixl_ep, m) {
-    m.def("query_mask_buffer_(int buffer, Tensor mask_status) -> ()");
+    m.def("query_mask_buffer_(int buffer, Tensor(a!) mask_status) -> ()");
     m.def(
         "get_next_combine_buffer(int buffer, int num_max_dispatch_tokens_per_rank, int hidden, "
         "int rank_bound) -> Tensor");
     m.def("get_local_buffer_tensor(int buffer, ScalarType dtype, int offset, bool use_rdma_buffer) "
           "-> Tensor");
     m.def("combine(int buffer, Tensor x, Tensor topk_idx, Tensor topk_weights, Tensor src_info, "
-          "Tensor layout_range, Tensor? combine_wait_recv_cost_stats, int "
+          "Tensor layout_range, Tensor(a!)? combine_wait_recv_cost_stats, int "
           "num_max_dispatch_tokens_per_rank, bool use_logfmt, bool zero_copy, bool async, bool "
-          "return_recv_hook, Tensor? out) -> (Tensor, int)");
+          "return_recv_hook, Tensor(b!)? out) -> (Tensor, int)");
     m.def("combine_recv_hook(int buffer) -> ()");
-    m.def("dispatch(int buffer, Tensor x, Tensor topk_idx, Tensor? "
-          "cumulative_local_expert_recv_stats, Tensor? dispatch_wait_recv_cost_stats, int "
+    m.def("dispatch(int buffer, Tensor x, Tensor topk_idx, Tensor(a!)? "
+          "cumulative_local_expert_recv_stats, Tensor(b!)? dispatch_wait_recv_cost_stats, int "
           "num_max_dispatch_tokens_per_rank, int? num_experts, bool use_fp8, bool round_scale, "
           "bool use_ue8m0, bool async, bool return_recv_hook) -> (Tensor, Tensor?, Tensor, Tensor, "
           "Tensor, int)");
