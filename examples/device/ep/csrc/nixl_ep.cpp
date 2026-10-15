@@ -28,6 +28,7 @@
 #include <pybind11/functional.h>
 #include <pybind11/stl.h>
 
+#include <torch/csrc/inductor/aoti_torch/c/shim.h>
 #include <torch/csrc/stable/ops.h>
 #include <torch/headeronly/core/ScalarType.h>
 
@@ -76,6 +77,24 @@ topk_idx_scalar_type() {
 #error "TOPK_IDX_BITS must be 64 or 32"
 #endif
 }
+
+template<size_t N>
+torch::stable::Tensor
+empty_cuda(const int64_t (&sizes)[N],
+           const int64_t (&strides)[N],
+           int32_t aoti_dtype,
+           int device_id) {
+    AtenTensorHandle handle = nullptr;
+    TORCH_ERROR_CODE_CHECK(aoti_torch_empty_strided(static_cast<int64_t>(N),
+                                                    sizes,
+                                                    strides,
+                                                    aoti_dtype,
+                                                    aoti_torch_device_type_cuda(),
+                                                    device_id,
+                                                    &handle));
+    return torch::stable::Tensor(handle);
+}
+
 } // namespace
 
 namespace nixl_ep {
@@ -463,7 +482,6 @@ Buffer::dispatch(const torch::stable::Tensor &x, const torch::stable::Tensor &to
 
     auto num_tokens = static_cast<int>(x.size(0)), hidden = static_cast<int>(x.size(1));
     auto num_topk = static_cast<int>(topk_idx.size(1));
-    const torch::stable::Device cuda_device{torch::headeronly::DeviceType::CUDA, device_id};
 
     // Buffer control
     int max_num_experts = max_num_ranks * num_experts_per_rank;
@@ -480,41 +498,25 @@ Buffer::dispatch(const torch::stable::Tensor &x, const torch::stable::Tensor &to
         stream_wait(launch_stream, compute_stream);
 
     // Allocate packed tensors
-    const int64_t packed_recv_x_sizes[] = {
-        num_experts_per_rank, rank_bound * num_max_dispatch_tokens_per_rank, hidden};
-    auto packed_recv_x = torch::stable::empty(
-        torch::headeronly::IntHeaderOnlyArrayRef(packed_recv_x_sizes, 3),
-        use_fp8 ? torch::headeronly::ScalarType::Float8_e4m3fn
-                : torch::headeronly::ScalarType::BFloat16,
-        std::nullopt,
-        cuda_device,
-        std::nullopt,
-        std::nullopt);
-    const int64_t packed_recv_src_info_sizes[] = {
-        num_experts_per_rank, rank_bound * num_max_dispatch_tokens_per_rank};
-    auto packed_recv_src_info = torch::stable::empty(
-        torch::headeronly::IntHeaderOnlyArrayRef(packed_recv_src_info_sizes, 2),
-        torch::headeronly::ScalarType::Int,
-        std::nullopt,
-        cuda_device,
-        std::nullopt,
-        std::nullopt);
-    const int64_t packed_recv_layout_range_sizes[] = {num_experts_per_rank, rank_bound};
-    auto packed_recv_layout_range = torch::stable::empty(
-        torch::headeronly::IntHeaderOnlyArrayRef(packed_recv_layout_range_sizes, 2),
-        torch::headeronly::ScalarType::Long,
-        std::nullopt,
-        cuda_device,
-        std::nullopt,
-        std::nullopt);
-    const int64_t packed_recv_count_sizes[] = {num_experts_per_rank};
-    auto packed_recv_count = torch::stable::empty(torch::headeronly::IntHeaderOnlyArrayRef(
-                                                      packed_recv_count_sizes, 1),
-                                                  torch::headeronly::ScalarType::Int,
-                                                  std::nullopt,
-                                                  cuda_device,
-                                                  std::nullopt,
-                                                  std::nullopt);
+    const int64_t recv_x_sizes[] = {num_experts_per_rank, num_max_recv_tokens, hidden};
+    const int64_t recv_x_strides[] = {static_cast<int64_t>(num_max_recv_tokens) * hidden, hidden, 1};
+    torch::stable::Tensor packed_recv_x =
+        empty_cuda(recv_x_sizes,
+                   recv_x_strides,
+                   use_fp8 ? aoti_torch_dtype_float8_e4m3fn() : aoti_torch_dtype_bfloat16(),
+                   device_id);
+    const int64_t src_info_sizes[] = {num_experts_per_rank, num_max_recv_tokens};
+    const int64_t src_info_strides[] = {num_max_recv_tokens, 1};
+    torch::stable::Tensor packed_recv_src_info =
+        empty_cuda(src_info_sizes, src_info_strides, aoti_torch_dtype_int32(), device_id);
+    const int64_t layout_sizes[] = {num_experts_per_rank, rank_bound};
+    const int64_t layout_strides[] = {rank_bound, 1};
+    torch::stable::Tensor packed_recv_layout_range =
+        empty_cuda(layout_sizes, layout_strides, aoti_torch_dtype_int64(), device_id);
+    const int64_t count_sizes[] = {num_experts_per_rank};
+    const int64_t count_strides[] = {1};
+    torch::stable::Tensor packed_recv_count =
+        empty_cuda(count_sizes, count_strides, aoti_torch_dtype_int32(), device_id);
 
     // Allocate column-majored scales
     std::optional<torch::stable::Tensor> packed_recv_x_scales;
@@ -522,31 +524,17 @@ Buffer::dispatch(const torch::stable::Tensor &x, const torch::stable::Tensor &to
     if (use_fp8) {
         // TODO: support unaligned cases
         EP_HOST_ASSERT(hidden % 512 == 0);
-        if (not use_ue8m0) {
-            const int64_t scale_sizes[] = {num_experts_per_rank,
-                                           hidden / 128,
-                                           rank_bound * num_max_dispatch_tokens_per_rank};
-            packed_recv_x_scales = torch::stable::empty(
-                torch::headeronly::IntHeaderOnlyArrayRef(scale_sizes, 3),
-                torch::headeronly::ScalarType::Float,
-                std::nullopt,
-                cuda_device,
-                std::nullopt,
-                std::nullopt);
-        } else {
+        if (use_ue8m0) {
             EP_HOST_ASSERT(round_scale);
-            const int64_t scale_sizes[] = {num_experts_per_rank,
-                                           hidden / 512,
-                                           rank_bound * num_max_dispatch_tokens_per_rank};
-            packed_recv_x_scales = torch::stable::empty(
-                torch::headeronly::IntHeaderOnlyArrayRef(scale_sizes, 3),
-                torch::headeronly::ScalarType::Int,
-                std::nullopt,
-                cuda_device,
-                std::nullopt,
-                std::nullopt);
         }
-        packed_recv_x_scales = torch::stable::transpose(*packed_recv_x_scales, 1, 2);
+        const int64_t groups = use_ue8m0 ? hidden / 512 : hidden / 128;
+        const int64_t scale_sizes[] = {num_experts_per_rank, num_max_recv_tokens, groups};
+        const int64_t scale_strides[] = {groups * num_max_recv_tokens, 1, num_max_recv_tokens};
+        packed_recv_x_scales =
+            empty_cuda(scale_sizes,
+                       scale_strides,
+                       use_ue8m0 ? aoti_torch_dtype_int32() : aoti_torch_dtype_float32(),
+                       device_id);
         packed_recv_x_scales_ptr = packed_recv_x_scales->mutable_data_ptr();
     }
 
@@ -635,7 +623,6 @@ Buffer::combine(const torch::stable::Tensor& x, const torch::stable::Tensor& top
     auto hidden = static_cast<int>(x.size(2));
     auto num_topk = static_cast<int>(topk_weights.size(1));
     auto num_combined_tokens = static_cast<int>(topk_weights.size(0));
-    const torch::stable::Device cuda_device{torch::headeronly::DeviceType::CUDA, device_id};
 
     // Buffer control
     int max_num_experts = max_num_ranks * num_experts_per_rank;
@@ -660,12 +647,8 @@ Buffer::combine(const torch::stable::Tensor& x, const torch::stable::Tensor& top
         combined_x = out.value();
     } else {
         const int64_t sizes[] = {num_combined_tokens, hidden};
-        combined_x = torch::stable::empty(torch::headeronly::IntHeaderOnlyArrayRef(sizes, 2),
-                                          torch::headeronly::ScalarType::BFloat16,
-                                          std::nullopt,
-                                          cuda_device,
-                                          std::nullopt,
-                                          std::nullopt);
+        const int64_t strides[] = {hidden, 1};
+        combined_x = empty_cuda(sizes, strides, aoti_torch_dtype_bfloat16(), device_id);
     }
 
     // Kernel launch
