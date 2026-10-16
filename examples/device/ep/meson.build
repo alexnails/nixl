@@ -71,8 +71,18 @@ nixl_ep_sources = [
 
 # Torch bundles its own pybind11 headers. Put the standalone pybind11 first so that
 # <pybind11/...> never resolves to the bundled copy.
-pybind_include = run_command(py, '-c', 'import pybind11; print(pybind11.get_include())',
-    check: true).stdout().strip()
+pybind_include_cmd = run_command(py, '-c', 'import pybind11; print(pybind11.get_include())',
+    check: false)
+pybind_include = ''
+if pybind_include_cmd.returncode() == 0
+    pybind_include = pybind_include_cmd.stdout().strip()
+else
+    pybind_include = pybind_dep.get_variable(pkgconfig: 'includedir', cmake: 'PACKAGE_INCLUDE_DIRS', default_value: '')
+endif
+if pybind_include == ''
+    warning('pybind11 include dir not found, skipping nixl_ep build')
+    subdir_done()
+endif
 
 nixl_ep_inc_dirs = [
     nixl_inc_dirs,
