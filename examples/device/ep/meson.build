@@ -89,7 +89,7 @@ nixl_ep_inc_dirs = [
     nixl_device_api_inc_dirs,
     include_directories('csrc'),
     include_directories('csrc/kernels'),
-    include_directories(pybind_include),
+    include_directories(pybind_include.split(';')),
     torch_inc_dirs,
 ]
 
