@@ -157,8 +157,8 @@ class Buffer:
             use_rdma_buffer: kept for API compatibility; the RDMA buffer is the only buffer and this must be True.
         """
         assert use_rdma_buffer, "Only the RDMA buffer is supported"
-        tensor = torch.ops.nixl_ep.get_local_buffer_tensor(
-            self.runtime._ptr(), dtype, offset, use_rdma_buffer
+        tensor = self.runtime.get_local_buffer_tensor(
+            torch.empty(0, dtype=dtype, device="meta"), offset, use_rdma_buffer
         )
         if size is None:
             return tensor
@@ -255,8 +255,7 @@ class Buffer:
             packed_recv_src_info,
             packed_recv_layout_range,
             event_ptr,
-        ) = torch.ops.nixl_ep.dispatch(
-            self.runtime._ptr(),
+        ) = self.runtime.dispatch(
             x,
             topk_idx,
             cumulative_local_expert_recv_stats,
@@ -270,11 +269,7 @@ class Buffer:
             return_recv_hook,
         )
         event = EventHandle._adopt_ptr(event_ptr) if event_ptr else None
-        hook = (
-            (lambda: torch.ops.nixl_ep.dispatch_recv_hook(self.runtime._ptr()))
-            if return_recv_hook
-            else None
-        )
+        hook = self.runtime.run_dispatch_recv_hook if return_recv_hook else None
         handle = (
             packed_recv_src_info,
             packed_recv_layout_range,
@@ -351,7 +346,7 @@ class Buffer:
             num_max_dispatch_tokens_per_rank,
             hidden,
         ) = handle
-        combined_x, event_ptr = torch.ops.nixl_ep.combine(
+        combined_x, event_ptr = self.runtime.combine(
             self.runtime._ptr(),
             x,
             topk_idx,
@@ -367,11 +362,7 @@ class Buffer:
             out,
         )
         event = EventHandle._adopt_ptr(event_ptr) if event_ptr else None
-        hook = (
-            (lambda: torch.ops.nixl_ep.combine_recv_hook(self.runtime._ptr()))
-            if return_recv_hook
-            else None
-        )
+        hook = self.runtime.run_combine_recv_hook if return_recv_hook else None
         tensors_to_record = (
             x,
             topk_idx,
@@ -405,7 +396,7 @@ class Buffer:
         Arguments:
             mask_status: `[num_ranks]` with `torch.int`, the mask status of each rank. `1` means mask and `0` means unmasked.
         """
-        torch.ops.nixl_ep.query_mask_buffer_(self.runtime._ptr(), mask_status)
+        self.runtime.query_mask_buffer(mask_status)
 
     def clean_mask_buffer(self):
         """
@@ -432,8 +423,7 @@ class Buffer:
             num_max_dispatch_tokens_per_rank,
             hidden,
         ) = handle
-        return torch.ops.nixl_ep.get_next_combine_buffer(
-            self.runtime._ptr(),
+        return self.runtime.get_next_combine_buffer(
             num_max_dispatch_tokens_per_rank,
             hidden,
             layout_range.size(1),

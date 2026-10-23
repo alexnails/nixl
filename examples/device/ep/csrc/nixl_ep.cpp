@@ -30,6 +30,7 @@
 
 #include <torch/csrc/inductor/aoti_torch/c/shim.h>
 #include <torch/csrc/stable/ops.h>
+#include <torch/csrc/stable/pyobject.h>
 #include <torch/headeronly/core/ScalarType.h>
 
 #include <algorithm>
@@ -93,6 +94,112 @@ empty_cuda(const int64_t (&sizes)[N],
                                                     device_id,
                                                     &handle));
     return torch::stable::Tensor(handle);
+}
+
+pybind11::object
+tensor_to_py(const torch::stable::Tensor &t) {
+    return pybind11::reinterpret_steal<pybind11::object>(
+        static_cast<PyObject *>(torch::stable::tensor_to_pyobject(t)));
+}
+
+torch::stable::Tensor
+tensor_from_py(const pybind11::object &obj) {
+    return torch::stable::tensor_from_pyobject(obj.ptr());
+}
+
+std::optional<torch::stable::Tensor>
+optional_tensor_from_py(const pybind11::object &obj) {
+    if (obj.is_none()) {
+        return std::nullopt;
+    }
+    return tensor_from_py(obj);
+}
+
+pybind11::tuple
+dispatch_py(nixl_ep::Buffer &self,
+            const pybind11::object &x,
+            const pybind11::object &topk_idx,
+            const pybind11::object &cumulative_local_expert_recv_stats,
+            const pybind11::object &dispatch_wait_recv_cost_stats,
+            int num_max_dispatch_tokens_per_rank,
+            std::optional<int> num_experts,
+            bool use_fp8,
+            bool round_scale,
+            bool use_ue8m0,
+            bool async,
+            bool return_recv_hook) {
+    auto [recv_x, recv_x_scales, recv_count, src_info, layout_range, event_ptr] =
+        self.dispatch(tensor_from_py(x),
+                      tensor_from_py(topk_idx),
+                      optional_tensor_from_py(cumulative_local_expert_recv_stats),
+                      optional_tensor_from_py(dispatch_wait_recv_cost_stats),
+                      num_max_dispatch_tokens_per_rank,
+                      num_experts,
+                      use_fp8,
+                      round_scale,
+                      use_ue8m0,
+                      async,
+                      return_recv_hook);
+    return pybind11::make_tuple(tensor_to_py(recv_x),
+                                recv_x_scales ? tensor_to_py(*recv_x_scales) :
+                                                pybind11::object(pybind11::none()),
+                                tensor_to_py(recv_count),
+                                tensor_to_py(src_info),
+                                tensor_to_py(layout_range),
+                                event_ptr);
+}
+
+pybind11::tuple
+combine_py(nixl_ep::Buffer &self,
+           const pybind11::object &x,
+           const pybind11::object &topk_idx,
+           const pybind11::object &topk_weights,
+           const pybind11::object &src_info,
+           const pybind11::object &layout_range,
+           const pybind11::object &combine_wait_recv_cost_stats,
+           int num_max_dispatch_tokens_per_rank,
+           bool use_logfmt,
+           bool zero_copy,
+           bool async,
+           bool return_recv_hook,
+           const pybind11::object &out) {
+    auto [combined_x, event_ptr] =
+        self.combine(tensor_from_py(x),
+                     tensor_from_py(topk_idx),
+                     tensor_from_py(topk_weights),
+                     tensor_from_py(src_info),
+                     tensor_from_py(layout_range),
+                     optional_tensor_from_py(combine_wait_recv_cost_stats),
+                     num_max_dispatch_tokens_per_rank,
+                     use_logfmt,
+                     zero_copy,
+                     async,
+                     return_recv_hook,
+                     optional_tensor_from_py(out));
+    return pybind11::make_tuple(tensor_to_py(combined_x), event_ptr);
+}
+
+pybind11::object
+get_local_buffer_tensor_py(const nixl_ep::Buffer &self,
+                           const pybind11::object &dtype_carrier,
+                           int64_t offset,
+                           bool use_rdma_buffer) {
+    return tensor_to_py(self.get_local_buffer_tensor(
+        tensor_from_py(dtype_carrier).scalar_type(), offset, use_rdma_buffer));
+}
+
+pybind11::object
+get_next_combine_buffer_py(const nixl_ep::Buffer &self,
+                           int num_max_dispatch_tokens_per_rank,
+                           int hidden,
+                           int rank_bound) {
+    return tensor_to_py(
+        self.get_next_combine_buffer(num_max_dispatch_tokens_per_rank, hidden, rank_bound));
+}
+
+void
+query_mask_buffer_py(const nixl_ep::Buffer &self, const pybind11::object &mask_status) {
+    self.query_mask_buffer(tensor_from_py(mask_status));
 }
 
 } // namespace
@@ -998,14 +1105,21 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("disconnect_ranks", &nixl_ep::Buffer::disconnect_ranks)
         .def("is_available", &nixl_ep::Buffer::is_available)
         .def("get_local_device_id", &nixl_ep::Buffer::get_local_device_id)
+        .def("get_local_buffer_tensor", &get_local_buffer_tensor_py)
         .def("get_comm_stream", &nixl_ep::Buffer::get_comm_stream)
         .def("destroy", &nixl_ep::Buffer::destroy)
+        .def("dispatch", &dispatch_py)
+        .def("combine", &combine_py)
         .def("update_mask_buffer", &nixl_ep::Buffer::update_mask_buffer)
+        .def("query_mask_buffer", &query_mask_buffer_py)
         .def("clean_mask_buffer", &nixl_ep::Buffer::clean_mask_buffer)
+        .def("get_next_combine_buffer", &get_next_combine_buffer_py)
         .def("get_local_metadata",
              [](const nixl_ep::Buffer &buffer) -> pybind11::bytes {
                  return pybind11::bytes(buffer.get_local_metadata());
              })
+        .def("run_dispatch_recv_hook", &nixl_ep::Buffer::run_dispatch_recv_hook)
+        .def("run_combine_recv_hook", &nixl_ep::Buffer::run_combine_recv_hook)
         .def("_ptr", [](nixl_ep::Buffer &self) { return reinterpret_cast<int64_t>(&self); });
     m.attr("topk_idx_bits") = TOPK_IDX_BITS;
     m.def("is_sm90_compiled", nixl_ep::is_sm90_compiled);

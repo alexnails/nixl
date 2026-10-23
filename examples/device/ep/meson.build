@@ -27,7 +27,7 @@ if torch_check.returncode() != 0
     subdir_done()
 endif
 
-torch_target_version = '0x020b000000000000'  # 2.11
+torch_target_version = '0x020e000000000000'  # 2.14
 
 # Get PyTorch base directory from Python
 torch_dir = run_command(py, '-c', 'import torch, os; print(os.path.dirname(torch.__file__))', check: true).stdout().strip()
@@ -64,7 +64,6 @@ endif
 nixl_ep_sources = [
     'csrc/cuda_stream.cpp',
     'csrc/nixl_ep.cpp',
-    'csrc/stable_torch.cpp',
     'csrc/vmm.cpp',
     'csrc/kernels/nixl_ep_ll.cu',
 ]
