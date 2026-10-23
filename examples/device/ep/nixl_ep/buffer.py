@@ -21,7 +21,7 @@
 import os
 from contextlib import contextmanager
 from datetime import timedelta
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -158,7 +158,7 @@ class Buffer:
         """
         assert use_rdma_buffer, "Only the RDMA buffer is supported"
         tensor = self.runtime.get_local_buffer_tensor(
-            torch.empty(0, dtype=dtype, device="meta"), offset, use_rdma_buffer
+            torch.empty(0, dtype=dtype, device="meta"), offset
         )
         if size is None:
             return tensor
@@ -193,11 +193,7 @@ class Buffer:
         async_finish: bool = False,
         return_recv_hook: bool = False,
     ) -> Tuple[
-        Union[Tuple[torch.Tensor, torch.Tensor], torch.Tensor],
-        torch.Tensor,
-        Tuple,
-        EventOverlap,
-        Optional[Callable],
+        Tuple[torch.Tensor, torch.Tensor], torch.Tensor, Tuple, EventOverlap, Callable
     ]:
         """
         A low-latency implementation for dispatching with NIXL device API.
@@ -254,7 +250,8 @@ class Buffer:
             packed_recv_count,
             packed_recv_src_info,
             packed_recv_layout_range,
-            event_ptr,
+            event,
+            hook,
         ) = self.runtime.dispatch(
             x,
             topk_idx,
@@ -268,8 +265,6 @@ class Buffer:
             async_finish,
             return_recv_hook,
         )
-        event = EventHandle._adopt_ptr(event_ptr) if event_ptr else None
-        hook = self.runtime.run_dispatch_recv_hook if return_recv_hook else None
         handle = (
             packed_recv_src_info,
             packed_recv_layout_range,
@@ -307,7 +302,7 @@ class Buffer:
         return_recv_hook: bool = False,
         out: Optional[torch.Tensor] = None,
         combine_wait_recv_cost_stats: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, EventOverlap, Optional[Callable]]:
+    ) -> Tuple[torch.Tensor, EventOverlap, Callable]:
         """
         A low-latency implementation for combining tokens (reduce **with weights**) with NIXL device API.
         This kernel requires all the ranks (no matter intranode or internode) should be visible via RDMA
@@ -346,8 +341,7 @@ class Buffer:
             num_max_dispatch_tokens_per_rank,
             hidden,
         ) = handle
-        combined_x, event_ptr = self.runtime.combine(
-            self.runtime._ptr(),
+        combined_x, event, hook = self.runtime.combine(
             x,
             topk_idx,
             topk_weights,
@@ -361,8 +355,6 @@ class Buffer:
             return_recv_hook,
             out,
         )
-        event = EventHandle._adopt_ptr(event_ptr) if event_ptr else None
-        hook = self.runtime.run_combine_recv_hook if return_recv_hook else None
         tensors_to_record = (
             x,
             topk_idx,
@@ -424,9 +416,7 @@ class Buffer:
             hidden,
         ) = handle
         return self.runtime.get_next_combine_buffer(
-            num_max_dispatch_tokens_per_rank,
-            hidden,
-            layout_range.size(1),
+            num_max_dispatch_tokens_per_rank, hidden, layout_range.size(1)
         )
 
     def update_memory_buffers(
