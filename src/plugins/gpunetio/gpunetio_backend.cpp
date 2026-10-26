@@ -1729,6 +1729,7 @@ nixlDocaEngine::prepXfer(const nixl_xfer_op_t &operation,
         return false;
     };
 
+    treq->qpData = rdma_qp->qp_data->get_qp_gpu_dev();
     treq->positions.reserve((wqe_count + DOCA_XFER_REQ_SIZE - 1) / DOCA_XFER_REQ_SIZE);
     if (!reserve_position()) {
         abandon_request();
@@ -1824,7 +1825,7 @@ nixlDocaEngine::prepXfer(const nixl_xfer_op_t &operation,
             }
         }
 
-        staged_req.qp_data = rdma_qp->qp_data->get_qp_gpu_dev();
+        staged_req.qp_data = treq->qpData;
         staged_req.qp_notif = rdma_qp->qp_notif->get_qp_gpu_dev();
         staged_req.qp_progress = rdma_qp->progress_gpu;
         const size_t publish_size =
@@ -1939,18 +1940,14 @@ nixlDocaEngine::postXfer(const nixl_xfer_op_t &operation,
     for (uint32_t idx : treq->positions) {
         const doca_error_t result = operation == NIXL_READ ?
             doca_kernel_read(treq->stream,
-                             xferReqRingCpu[idx].qp_data,
+                             treq->qpData,
                              xferReqRingGpu,
                              gpu_state_gpu,
                              host_state_gpu_,
                              idx,
                              treq->attachedStream) :
-            doca_kernel_write(treq->stream,
-                              xferReqRingCpu[idx].qp_data,
-                              xferReqRingGpu,
-                              gpu_state_gpu,
-                              host_state_gpu_,
-                              idx);
+            doca_kernel_write(
+                treq->stream, treq->qpData, xferReqRingGpu, gpu_state_gpu, host_state_gpu_, idx);
         if (result != DOCA_SUCCESS) {
             treq->postStatus = NIXL_ERR_BACKEND;
             break;
@@ -2002,9 +1999,12 @@ nixlDocaEngine::postStripedWrite(nixlDocaBckndReq *request, const std::string &r
     last.posting_ctas_done = 0;
     last.peer_write_completed = peer->writeCompletedGpu.get();
     last.write_ticket = ++peer->postedWriteTicket;
+    // Build the mask locally: |= on the slot would read it back through the GPU mapping.
+    uint32_t wait_completion_mask = 0;
     for (size_t ordinal = 0; ordinal + 1 < request->positions.size(); ++ordinal) {
-        last.wait_completion_mask |= 1U << request->positions[ordinal];
+        wait_completion_mask |= 1U << request->positions[ordinal];
     }
+    last.wait_completion_mask = wait_completion_mask;
     std::atomic_thread_fence(std::memory_order_release);
 
     // One stream orders all grids, including the previous same-peer final post.
