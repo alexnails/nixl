@@ -72,6 +72,12 @@ One RDMA operation carries at most `DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE` (1 Gi
 descriptor is posted as several consecutive operations of at most 1 GiB each. A request holds at
 most 32 x 512 operations; `prepXfer` rejects larger requests with `NIXL_ERR_INVALID_PARAM`.
 
+### Notifications
+
+Each peer has 4096 notification send buffers. A prepared request with a notification owns one
+until the request is released, and `genNotif` holds one while it sends. When all of them are owned,
+`prepXfer` and `genNotif` return `NIXL_ERR_BACKEND`.
+
 ### Comparing striped WRITE submission designs
 
 For a matched comparison, build both versions with the same release toolchain
