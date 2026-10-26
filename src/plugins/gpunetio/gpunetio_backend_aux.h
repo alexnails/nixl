@@ -20,11 +20,16 @@
 
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <cstring>
 #include <iostream>
 #include <limits>
 #include <mutex>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 #include <sys/types.h>
+#include <system_error>
 #include <thread>
 #include <vector>
 #include <ifaddrs.h>
@@ -93,6 +98,12 @@ canPairWrite(uintptr_t address,
         next_length <= max_length && length <= max_length - next_length;
 }
 
+/** A descriptor is never split across WQEs, so it must fit one SDK RDMA operation. */
+inline bool
+fitsSingleWqe(size_t length) {
+    return length <= DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE;
+}
+
 } // namespace nixl::gpunetio
 
 constexpr uint32_t RDMA_SEND_QUEUE_SIZE = 2048;
@@ -112,6 +123,26 @@ constexpr uint32_t DOCA_MAX_NOTIF_INFLIGHT = RDMA_RECV_QUEUE_SIZE;
 constexpr uint32_t DOCA_MAX_NOTIF_MESSAGE_SIZE = 8192;
 constexpr time_t DOCA_OOB_SOCKET_TIMEOUT_SEC = 10;
 constexpr uint32_t DOCA_NOTIF_NULL = 0xFFFFFFFF;
+
+namespace nixl::gpunetio {
+
+/** Parse cuda_streams: empty selects the full pool, otherwise [1, DOCA_POST_STREAM_NUM]. */
+inline uint32_t
+parseCudaStreams(std::string_view value) {
+    if (value.empty()) {
+        return DOCA_POST_STREAM_NUM;
+    }
+    uint32_t count = 0;
+    const auto parsed = std::from_chars(value.data(), value.data() + value.size(), count);
+    if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || count < 1 ||
+        count > DOCA_POST_STREAM_NUM) {
+        throw std::invalid_argument("cuda_streams must be an integer in [1, " +
+                                    std::to_string(DOCA_POST_STREAM_NUM) + "]");
+    }
+    return count;
+}
+
+} // namespace nixl::gpunetio
 
 #ifndef ACCESS_ONCE
 #define ACCESS_ONCE(x) (*(volatile uint8_t *)&(x))
@@ -197,7 +228,6 @@ struct docaNotif {
     uintptr_t msg_buf;
     size_t msg_size;
     uint32_t msg_num;
-    uint32_t msg_last;
 };
 
 class nixlDocaConnection : public nixlBackendConnMD {

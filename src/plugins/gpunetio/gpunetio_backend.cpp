@@ -304,13 +304,7 @@ nixlDocaEngine::nixlDocaEngine(const nixlBackendInitParams *init_params)
     }
     NIXL_INFO << std::endl;
 
-    nstreams = 0;
-    if (custom_params->count("cuda_streams") != 0 && (*custom_params)["cuda_streams"] != "") {
-        nstreams = std::stoi((*custom_params)["cuda_streams"]);
-    }
-    if (nstreams == 0) {
-        nstreams = DOCA_POST_STREAM_NUM;
-    }
+    nstreams = static_cast<int>(nixl::gpunetio::parseCudaStreams((*custom_params)["cuda_streams"]));
 
     NIXL_INFO << "CUDA streams used for pool mode: " << nstreams;
 
@@ -1667,6 +1661,12 @@ nixlDocaEngine::prepXfer(const nixl_xfer_op_t &operation,
         if (local[idx].len != remote[idx].len) {
             return NIXL_ERR_INVALID_PARAM;
         }
+        if (!nixl::gpunetio::fitsSingleWqe(local[idx].len)) {
+            NIXL_ERROR << "Descriptor " << idx << " has " << local[idx].len
+                       << " bytes, above the GPUNETIO per-descriptor limit of "
+                       << DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE;
+            return NIXL_ERR_INVALID_PARAM;
+        }
     }
 
     if (operation == NIXL_WRITE && dataQpCount_ > 1 && opt_args != nullptr &&
@@ -1701,7 +1701,7 @@ nixlDocaEngine::prepXfer(const nixl_xfer_op_t &operation,
     };
 
     if (opt_args == nullptr || opt_args->customParam.empty()) {
-        stream_id = (xferStream.fetch_add(1) & (nstreams - 1));
+        stream_id = xferStream.fetch_add(1) % static_cast<uint32_t>(nstreams);
         treq->stream = post_stream[stream_id];
     } else {
         if (opt_args->customParam.size() != sizeof(cudaStream_t)) {
