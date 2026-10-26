@@ -98,10 +98,11 @@ canPairWrite(uintptr_t address,
         next_length <= max_length && length <= max_length - next_length;
 }
 
-/** A descriptor is never split across WQEs, so it must fit one SDK RDMA operation. */
-inline bool
-fitsSingleWqe(size_t length) {
-    return length <= DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE;
+/** WQEs for one descriptor: a WQE carries at most the SDK transfer limit, and at least one. */
+inline uint64_t
+descriptorWqeCount(size_t length) {
+    constexpr size_t max_length = DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE;
+    return length <= max_length ? 1 : length / max_length + (length % max_length != 0 ? 1 : 0);
 }
 
 } // namespace nixl::gpunetio
