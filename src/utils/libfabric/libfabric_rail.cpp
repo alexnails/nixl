@@ -25,6 +25,7 @@
 #include <cuda_runtime.h>
 #endif
 
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <stack>
@@ -618,7 +619,10 @@ nixlLibfabricRail::nixlLibfabricRail(const std::string &device,
 
         if (provider_name == "efa") {
             // Disable unsolicited write recv for EFA RDM to reduce CQ overflow likelihood
-            const bool use_unsolicited_write_recv = false; // Set to false to disable the feature
+            const char *uwr_env = std::getenv("NIXL_LIBFABRIC_EFA_UNSOLICITED_WRITE_RECV");
+            const bool use_unsolicited_write_recv =
+                uwr_env != nullptr &&
+                (std::strcmp(uwr_env, "1") == 0 || std::strcmp(uwr_env, "true") == 0);
             ret = fi_setopt(&endpoint->fid,
                             FI_OPT_ENDPOINT,
                             NIXL_OPT_EFA_USE_UNSOLICITED_WRITE_RECV,
@@ -628,7 +632,9 @@ nixlLibfabricRail::nixlLibfabricRail(const std::string &device,
                 NIXL_WARN << "fi_setopt FI_OPT_EFA_USE_UNSOLICITED_WRITE_RECV failed for rail "
                           << rail_id << ": " << fi_strerror(-ret) << " - continuing anyway";
             } else if (ret == 0) {
-                NIXL_INFO << "Successfully disabled unsolicited write recv for rail " << rail_id;
+                NIXL_INFO << "Unsolicited write recv "
+                          << (use_unsolicited_write_recv ? "enabled" : "disabled") << " for rail "
+                          << rail_id;
             } else if (ret == -FI_ENOSYS || ret == -FI_ENOPROTOOPT) {
                 NIXL_INFO << "FI_OPT_EFA_USE_UNSOLICITED_WRITE_RECV not supported for rail "
                           << rail_id << " (provider: " << provider_name

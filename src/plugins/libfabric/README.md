@@ -144,6 +144,17 @@ nodes are selected first), while keeping the same effort to avoid saturating top
 - If user override exceeds total capacity of all EFA devices on the machine, then all rails will be
 used for DRAM_SEG memory type
 
+### NIXL_LIBFABRIC_EFA_UNSOLICITED_WRITE_RECV
+
+On EFA the plugin disables the provider's unsolicited write receive on every endpoint, because with it
+enabled remote write completions can be lost under load. With it disabled, every incoming write with
+immediate data consumes a posted receive on the target. A target that takes many writes from many
+peers at once can run out of posted receives and fail its endpoint.
+
+Setting NIXL_LIBFABRIC_EFA_UNSOLICITED_WRITE_RECV to `1` or `true` skips the disable and leaves the
+provider default. Any other value, or leaving it unset, keeps the plugin's default of disabling it.
+With `NIXL_LOG_LEVEL=INFO` each EFA rail logs whether it was enabled or disabled.
+
 ### Summary
 
 The following table summarizes briefly the plugin's runtime configuration:
@@ -154,6 +165,7 @@ The following table summarizes briefly the plugin's runtime configuration:
 | num_threads | Enables a thread pool for parallel descriptor posting in postXfer | Backend init param | integer | 4, 8 | Default 0 keeps the serial posting path |
 | split_batch_size | Minimum descriptor count before postXfer uses the posting thread pool | Backend init param | integer | 1024, 4096 | Default 1024; only applies when num_threads is greater than 0 |
 | dmabuf_mapping | Selects the CUDA dmabuf mapping type a VRAM_SEG registration exports for an EFA rail | Backend init param or `NIXL_LIBFABRIC_DMABUF_MAPPING` environment variable | auto, pcie, default, off | auto, off | Default auto takes a per-NIC verdict from the PCIe-path topology; pcie and default force the GPU's PCIe aperture (BAR1) or the platform default mapping on every device; off registers by virtual address. Only applies to CUDA device memory on an EFA provider whose fabric carries libfabric API 1.20 or newer |
+| efa_unsolicited_write_recv | Keeps the EFA provider's unsolicited write receive on instead of disabling it | `NIXL_LIBFABRIC_EFA_UNSOLICITED_WRITE_RECV` environment variable | 1, true | 1 | Unset (default) disables the feature. Only applies to the EFA provider |
 
 ## API Reference
 
