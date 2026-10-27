@@ -848,25 +848,7 @@ nixlLibfabricRail::progressCompletionQueue() {
     if (ret < 0 && ret != -FI_EAGAIN) {
         NIXL_ERROR << "fi_cq_readfrom returned error " << ret << " on rail " << rail_id << ": "
                    << fi_strerror(-ret);
-        if (err_ret > 0) {
-            NIXL_ERROR << "CQ read failed on rail " << rail_id
-                       << " with error: " << fi_strerror(err_entry.err)
-                       << " prov_errno: " << err_entry.prov_errno << " len: " << err_entry.len;
-
-            // Notify the owning handle of the error and release the request. Done without the
-            // EP lock: the callback and the request pool take their own locks.
-            if (err_entry.op_context) {
-                nixlLibfabricReq *req = findRequestFromContext(err_entry.op_context);
-                if (req && req->in_use) {
-                    if (req->completion_callback) {
-                        req->completion_callback(NIXL_ERR_BACKEND);
-                    }
-                    releaseRequest(req);
-                }
-            }
-        } else {
-            NIXL_ERROR << "fi_cq_readerr failed with " << err_ret;
-        }
+        failCqErrorRequest(err_ret, err_entry, "CQ read");
         return NIXL_ERR_BACKEND;
     }
 
@@ -915,11 +897,12 @@ nixlLibfabricRail::pollForCompletions() {
     fi_addr_t src_addrs[NIXL_LIBFABRIC_CQ_BATCH_SIZE];
     struct fi_cq_err_entry err_entry = {};
     int cq_ret;
+    int err_ret = 0;
     {
         const std::lock_guard<std::mutex> ep_lock(ep_mutex_);
         cq_ret = fi_cq_readfrom(cq, cq_buf, NIXL_LIBFABRIC_CQ_BATCH_SIZE, src_addrs);
         if (cq_ret < 0 && cq_ret != -FI_EAGAIN) {
-            fi_cq_readerr(cq, &err_entry, 0);
+            err_ret = fi_cq_readerr(cq, &err_entry, 0);
         }
     }
     if (cq_ret > 0) {
@@ -927,9 +910,31 @@ nixlLibfabricRail::pollForCompletions() {
             processCompletionQueueEntry(&cq_buf[c], src_addrs[c]);
         }
     } else if (cq_ret < 0 && cq_ret != -FI_EAGAIN) {
-        NIXL_ERROR << "CQ error in drain interleave on rail " << rail_id << ": "
-                   << fi_strerror(err_entry.err);
+        failCqErrorRequest(err_ret, err_entry, "CQ error in drain interleave");
     }
+}
+
+void
+nixlLibfabricRail::failCqErrorRequest(int err_ret,
+                                      const struct fi_cq_err_entry &err_entry,
+                                      const char *where) const {
+    if (err_ret <= 0) {
+        NIXL_ERROR << where << " on rail " << rail_id << ": fi_cq_readerr failed with " << err_ret;
+        return;
+    }
+    NIXL_ERROR << where << " on rail " << rail_id << " with error: " << fi_strerror(err_entry.err)
+               << " prov_errno: " << err_entry.prov_errno << " len: " << err_entry.len;
+    if (!err_entry.op_context) {
+        return;
+    }
+    nixlLibfabricReq *req = findRequestFromContext(err_entry.op_context);
+    if (!req || !req->in_use) {
+        return;
+    }
+    if (req->completion_callback) {
+        req->completion_callback(NIXL_ERR_BACKEND);
+    }
+    releaseRequest(req);
 }
 
 // Route completion to appropriate handler (rail-specific)
