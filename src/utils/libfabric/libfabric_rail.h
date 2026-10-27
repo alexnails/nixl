@@ -652,6 +652,13 @@ private:
     void
     pollForCompletions();
 
+    /** Fail the request named by a CQ error entry that fi_cq_readerr returned (err_ret is its
+     *  return value). The entry is that operation's only completion, so the request's completion
+     *  callback runs here with NIXL_ERR_BACKEND and the request is released. Called without
+     *  ep_mutex_ held: the callback and the request pools take their own locks. */
+    void
+    failCqErrorRequest(int err_ret, const struct fi_cq_err_entry &err_entry, const char *where) const;
+
     /** Record that fi_addr belongs to agent_idx. Called from insertAddress(). */
     void
     mapSourceAddress(fi_addr_t fi_addr, uint32_t agent_idx) const;
